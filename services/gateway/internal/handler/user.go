@@ -308,8 +308,6 @@ func (h *UserHandler) HandleGoogleCallback(w http.ResponseWriter, r *http.Reques
 }
 
 // TODO: Implement update and delete handlers
-// The following handlers are placeholders and should be implemented
-// based on your proto definitions (e.g., UpdateUserRequest, DeleteUserRequest).
 
 // HandlePartiallyUpdateUserByID handles PATCH requests to partially update a user.
 func (h *UserHandler) HandlePartiallyUpdateUserByID(w http.ResponseWriter, r *http.Request) {

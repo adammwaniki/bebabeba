@@ -161,3 +161,32 @@ func (s *service) GetUserForAuth(ctx context.Context, req *genproto.GetUserForAu
     }
     return user, nil
 }
+
+// ListUsers returns a list of users from the db
+func (s *service) ListUsers(ctx context.Context, req *genproto.ListUsersRequest) (*genproto.ListUsersResponse, error) {
+	// Validate page size
+	pageSize := req.GetPageSize()
+	if pageSize <= 0 {
+		pageSize = 50 // Default
+	}
+	if pageSize > 100 {
+		pageSize = 100 // Maximum limit
+	}
+
+	// Call store layer
+	users, nextPageToken, err := s.store.ListUsers(
+		ctx,
+		pageSize,
+		req.GetPageToken(),
+		req.StatusFilter,
+		req.GetNameFilter(),
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list users: %v", err)
+	}
+
+	return &genproto.ListUsersResponse{
+		Users:         users,
+		NextPageToken: nextPageToken,
+	}, nil
+}

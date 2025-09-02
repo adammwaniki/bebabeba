@@ -123,26 +123,28 @@ func (h *grpcHandler) GetUserBySSOID(ctx context.Context, req *genproto.GetUserB
     return user, nil
 }
 
-/*
-// GetUserForAuth handles the grpc request to retrieve a user for authentication via jwt
-func (h *grpcHandler) GetUserForAuth(ctx context.Context, req *genproto.GetUserForAuthRequest) (*genproto.AuthUserResponse, error) {
-    authUser, err := h.service.GetUserForAuth(ctx, req.GetEmail())
-    if err != nil {
-        return nil, err
-    }
-    
-    return &genproto.AuthUserResponse{
-        Id:           authUser.ID,
-        PasswordHash: safeDeref(authUser.PasswordHash),
-        Status:       authUser.Status,
-    }, nil
-}
+func (h *grpcHandler) ListUsers(ctx context.Context, req *genproto.ListUsersRequest) (*genproto.ListUsersResponse, error) {
+	log.Println("Handling ListUsers gRPC request.")
 
-func safeDeref(s *string) string {
-    if s != nil {
-        return *s
-    }
-    return ""
-}
+	// Validate page size limits
+	if req.GetPageSize() > 100 {
+		log.Printf("ListUsers: page size %d exceeds maximum of 100", req.GetPageSize())
+		return nil, status.Error(codes.InvalidArgument, "page size cannot exceed 100")
+	}
 
-*/
+	// Call the service layer to list users
+	resp, err := h.service.ListUsers(ctx, req)
+	if err != nil {
+		// If the error from the service layer is already a gRPC status error, return it directly
+		if st, ok := status.FromError(err); ok {
+			log.Printf("ListUsers failed from service layer with gRPC status: %v", st.Code())
+			return nil, st.Err()
+		}
+		// For any other unexpected errors from the service layer, log and return Internal
+		log.Printf("ListUsers failed from service layer with unexpected error: %v", err)
+		return nil, status.Error(codes.Internal, "failed to list users")
+	}
+
+	log.Printf("ListUsers successful, returned %d users", len(resp.Users))
+	return resp, nil
+}

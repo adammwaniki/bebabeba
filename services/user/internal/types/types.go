@@ -16,6 +16,7 @@ type UserService interface {
     GetUserByID(ctx context.Context, req *genproto.GetUserRequest) (*genproto.GetUserResponse, error)
     GetUserBySSOID(ctx context.Context, req *genproto.GetUserBySSOIDRequest) (*genproto.GetUserResponse, error)
 	GetUserForAuth(ctx context.Context, req *genproto.GetUserForAuthRequest) (*genproto.AuthUserResponse, error)
+	ListUsers(ctx context.Context, req *genproto.ListUsersRequest) (*genproto.ListUsersResponse, error)
 }
 
 type UserStore interface {
@@ -30,6 +31,7 @@ type UserStore interface {
     GetByID(ctx context.Context, id uuid.UUID) (*genproto.GetUserResponse, error)
     GetUserBySSOID(ctx context.Context, ssoID string) (*genproto.GetUserResponse, error)
 	GetUserForAuth(ctx context.Context, email string) (*genproto.AuthUserResponse, error)
+	ListUsers(ctx context.Context, pageSize int32, pageToken string, statusFilter *genproto.UserStatusEnum, nameFilter string) ([]*genproto.GetUserResponse, string, error)
 }
 
 // gRPC handler interface

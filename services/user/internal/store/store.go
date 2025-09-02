@@ -1,9 +1,10 @@
-//services/user/internal/store/store.go
+// services/user/internal/store/store.go
 package store
 
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
@@ -319,4 +320,155 @@ func (s *store) GetUserForAuth(ctx context.Context, email string) (*genproto.Aut
     resp.Status = genproto.UserStatusEnum(statusVal)
     
     return &resp, nil
+}
+
+const listUsersQuery = `
+SELECT
+  LOWER(
+        CONCAT(
+            HEX(SUBSTR(external_id, 1, 4)), '-',
+            HEX(SUBSTR(external_id, 5, 2)), '-',
+            HEX(SUBSTR(external_id, 7, 2)), '-',
+            HEX(SUBSTR(external_id, 9, 2)), '-',
+            HEX(SUBSTR(external_id, 11, 6))
+        )
+    ) AS external_id,
+  first_name,
+  last_name,
+  email,
+  status,
+  terms_accepted_at,
+  created_at,
+  updated_at
+FROM users
+WHERE (?='' OR status = ?)
+  AND (?='' OR CONCAT(first_name, ' ', last_name) LIKE ?)
+  AND (?='' OR created_at > ?)
+ORDER BY created_at DESC
+LIMIT ?`
+
+const listUsersCountQuery = `
+SELECT COUNT(*)
+FROM users
+WHERE (?='' OR status = ?)
+  AND (?='' OR CONCAT(first_name, ' ', last_name) LIKE ?)`
+
+// ListUsers retrieves a paginated list of users with optional filtering
+func (s *store) ListUsers(ctx context.Context, pageSize int32, pageToken string, statusFilter *genproto.UserStatusEnum, nameFilter string) ([]*genproto.GetUserResponse, string, error) {
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 50 // Default page size with maximum limit
+	}
+
+	// Parse page token to get cursor timestamp
+	var cursorTime time.Time
+	if pageToken != "" {
+		// Decode base64 page token to get timestamp
+		decoded, err := base64.URLEncoding.DecodeString(pageToken)
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid page token: %w", err)
+		}
+		if err := cursorTime.UnmarshalText(decoded); err != nil {
+			return nil, "", fmt.Errorf("invalid page token format: %w", err)
+		}
+	}
+
+	// Prepare filter parameters
+	statusStr := ""
+	if statusFilter != nil {
+		statusStr = statusFilter.String()
+	}
+
+	namePattern := ""
+	if nameFilter != "" {
+		namePattern = "%" + nameFilter + "%"
+	}
+
+	cursorStr := ""
+	if !cursorTime.IsZero() {
+		cursorStr = cursorTime.Format(time.RFC3339Nano)
+	}
+
+	// Execute query with filters
+	rows, err := s.db.QueryContext(ctx, listUsersQuery,
+		statusStr, statusStr,           // Status filter (twice for WHERE condition)
+		namePattern, namePattern,       // Name filter (twice for WHERE condition)
+		cursorStr, cursorStr,           // Cursor time filter (twice for WHERE condition)
+		pageSize+1,                     // Fetch one extra to determine if there are more pages
+	)
+	if err != nil {
+		return nil, "", fmt.Errorf("querying users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []*genproto.GetUserResponse
+	var lastCreatedAt time.Time
+
+	for rows.Next() {
+		var user genproto.GetUserResponse
+		var (
+			dbExternalID    string
+			dbFirstName     string
+			dbLastName      string
+			dbEmail         string
+			statusStr       string
+			termsAcceptedAt time.Time
+			createdAt       time.Time
+			updatedAt       sql.NullTime
+		)
+
+		err := rows.Scan(
+			&dbExternalID,
+			&dbFirstName,
+			&dbLastName,
+			&dbEmail,
+			&statusStr,
+			&termsAcceptedAt,
+			&createdAt,
+			&updatedAt,
+		)
+		if err != nil {
+			return nil, "", fmt.Errorf("scanning user row: %w", err)
+		}
+
+		// Convert status string to enum
+		statusVal, ok := genproto.UserStatusEnum_value[statusStr]
+		if !ok {
+			return nil, "", fmt.Errorf("invalid status value found in DB: %s", statusStr)
+		}
+
+		// Populate user response
+		user.Id = dbExternalID
+		user.FirstName = dbFirstName
+		user.LastName = dbLastName
+		user.Email = dbEmail
+		user.Status = genproto.UserStatusEnum(statusVal)
+		user.TermsAcceptedAt = timestamppb.New(termsAcceptedAt)
+		user.CreatedAt = timestamppb.New(createdAt)
+
+		if updatedAt.Valid {
+			user.UpdatedAt = timestamppb.New(updatedAt.Time)
+		}
+
+		users = append(users, &user)
+		lastCreatedAt = createdAt
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("iterating user rows: %w", err)
+	}
+
+	// Determine next page token
+	var nextPageToken string
+	if int32(len(users)) > pageSize {
+		// Remove the extra user we fetched
+		users = users[:pageSize]
+		// Create next page token from the last user's created_at timestamp
+		tokenBytes, err := lastCreatedAt.MarshalText()
+		if err != nil {
+			return nil, "", fmt.Errorf("creating next page token: %w", err)
+		}
+		nextPageToken = base64.URLEncoding.EncodeToString(tokenBytes)
+	}
+
+	return users, nextPageToken, nil
 }
