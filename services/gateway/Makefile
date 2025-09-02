@@ -1,0 +1,7 @@
+include ./cmd/.env
+export
+
+.PHONY: run
+
+run:
+	@cd cmd && air
