@@ -39,6 +39,14 @@ var (
 	jwtSecret = os.Getenv("JWT_SECRET")
 	jwtIssuer = os.Getenv("JWT_ISSUER")
 
+    /*
+    // In production for AWS, Azure, GCP, etc.
+    jwtSecret, err := secretsManager.GetSecret("jwt-signing-key")
+    if err != nil {
+        log.Fatalf("Failed to retrieve JWT secret: %v", err)
+    }
+    */
+
 	// Database configuration for sessions
 	dbDSN = os.Getenv("SESSIONS_DB_DSN") // Using the same DB as user service for now - I might use redis later for speed
 )
