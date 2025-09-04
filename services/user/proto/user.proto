@@ -17,7 +17,7 @@ service UserService {
     rpc GetUserForAuth(GetUserForAuthRequest) returns (AuthUserResponse);
     rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
     rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
-    rpc DeleteUser(DeleteUserRequest) returns (google.protobuf.Empty); // I'll update this to handle data anonymization over hard deletion
+    rpc DeleteUser(DeleteUserRequest) returns (google.protobuf.Empty); // I'll update this to handle data anonymization after soft deletion
 
     // Compliance endpoints - requires special permissions
     rpc GetUserForCompliance(GetUserRequest) returns (CoreUserCompliance);
@@ -38,8 +38,9 @@ message GetUserForAuthRequest {
 }
 
 message UpdateUserRequest {
-    UserInput user = 1;
-    google.protobuf.FieldMask update_mask = 2;
+    string user_id = 1;
+    UserInput user = 2;
+    google.protobuf.FieldMask update_mask = 3;
 }
 
 message RegistrationRequest { // For Create requests

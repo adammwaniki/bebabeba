@@ -1,4 +1,4 @@
-//services/user/api/handler.go
+// services/user/api/handler.go
 package api
 
 import (
@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // grpcHandler implements the genproto.UserServiceServer interface.
@@ -147,4 +148,18 @@ func (h *grpcHandler) ListUsers(ctx context.Context, req *genproto.ListUsersRequ
 
 	log.Printf("ListUsers successful, returned %d users", len(resp.Users))
 	return resp, nil
+}
+
+// UpdateUser implements the gRPC UpdateUser method
+func (s *grpcHandler) UpdateUser(ctx context.Context, req *genproto.UpdateUserRequest) (*genproto.UpdateUserResponse, error) {
+	return s.service.UpdateUser(ctx, req)
+}
+
+// DeleteUser implements the gRPC DeleteUser method
+func (s *grpcHandler) DeleteUser(ctx context.Context, req *genproto.DeleteUserRequest) (*emptypb.Empty, error) {
+	err := s.service.DeleteUser(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &emptypb.Empty{}, nil
 }

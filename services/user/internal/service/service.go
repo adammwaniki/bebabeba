@@ -1,4 +1,4 @@
-//services/user/internal/service/service.go
+// services/user/internal/service/service.go
 package service
 
 import (
@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/adammwaniki/bebabeba/services/auth/authn/passwords"
@@ -189,4 +190,241 @@ func (s *service) ListUsers(ctx context.Context, req *genproto.ListUsersRequest)
 		Users:         users,
 		NextPageToken: nextPageToken,
 	}, nil
+}
+
+// UpdateUser handles the update of an existing user
+// services/user/internal/service/service.go
+// Updated UpdateUser method with authentication method business logic
+
+func (s *service) UpdateUser(ctx context.Context, req *genproto.UpdateUserRequest) (*genproto.UpdateUserResponse, error) {
+	// Validate the incoming request
+	if req.User == nil {
+		return nil, status.Errorf(codes.InvalidArgument, "user data is required")
+	}
+	if req.UserId == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "user ID is required")
+	}
+
+	userInput := req.User
+	updateMask := req.UpdateMask
+
+	// Parse the user ID
+	userID, err := uuid.FromString(req.UserId)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid user ID format: %v", err)
+	}
+
+	// BUSINESS LOGIC: Check if user is trying to change authentication method
+	if updateMask != nil {
+		containsPasswordUpdate := false
+		containsSSOUpdate := false
+		
+		for _, path := range updateMask.Paths {
+			if path == "password" {
+				containsPasswordUpdate = true
+			}
+			if path == "sso_id" {
+				containsSSOUpdate = true
+			}
+		}
+		
+		// If trying to update authentication method, verify it's allowed
+		if containsPasswordUpdate || containsSSOUpdate {
+			// Get user's current authentication method
+			userAuthResp, err := s.store.GetUserForAuth(ctx, "")
+			if err != nil {
+				// If we can't get auth info by email, get user first
+				currentUser, err := s.store.GetByID(ctx, userID)
+				if err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return nil, status.Errorf(codes.NotFound, "user not found")
+					}
+					return nil, status.Errorf(codes.Internal, "failed to get current user: %v", err)
+				}
+				
+				// Now get auth info by email
+				userAuthResp, err = s.store.GetUserForAuth(ctx, currentUser.Email)
+				if err != nil {
+					return nil, status.Errorf(codes.Internal, "failed to get user auth info: %v", err)
+				}
+			}
+			
+			isCurrentlyPasswordUser := userAuthResp.PasswordHash != ""
+			
+			if containsPasswordUpdate && !isCurrentlyPasswordUser {
+				return nil, status.Errorf(codes.PermissionDenied, 
+					"SSO users cannot set passwords. Please manage your password through your identity provider.")
+			}
+			
+			if containsSSOUpdate && isCurrentlyPasswordUser {
+				return nil, status.Errorf(codes.PermissionDenied, 
+					"Password users cannot switch to SSO authentication. Please contact support for account migration.")
+			}
+		}
+	}
+
+	// Validate and normalize fields that are being updated (only if they pass business logic checks)
+	if err := validator.ValidateUserInput(userInput, updateMask); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "validation failed: %v", err)
+	}
+
+	// Apply normalization to fields that passed validation
+	if updateMask != nil {
+		for _, path := range updateMask.Paths {
+			switch path {
+			case "first_name":
+				if userInput.FirstName != "" {
+					userInput.FirstName = validator.NormalizeName(userInput.FirstName)
+				}
+			case "last_name":
+				if userInput.LastName != "" {
+					userInput.LastName = validator.NormalizeName(userInput.LastName)
+				}
+			case "email":
+				if userInput.Email != "" {
+					userInput.Email = strings.TrimSpace(userInput.Email)
+				}
+			}
+		}
+	} else {
+		// Normalize all provided fields
+		if userInput.FirstName != "" {
+			userInput.FirstName = validator.NormalizeName(userInput.FirstName)
+		}
+		if userInput.LastName != "" {
+			userInput.LastName = validator.NormalizeName(userInput.LastName)
+		}
+		if userInput.Email != "" {
+			userInput.Email = strings.TrimSpace(userInput.Email)
+		}
+	}
+
+	// Prepare update fields
+	updates := types.UserUpdateFields{}
+
+	// Check field mask or update all provided fields if no mask
+	if updateMask != nil {
+		for _, path := range updateMask.Paths {
+			switch path {
+			case "first_name":
+				if userInput.FirstName != "" {
+					updates.FirstName = &userInput.FirstName
+				}
+			case "last_name":
+				if userInput.LastName != "" {
+					updates.LastName = &userInput.LastName
+				}
+			case "email":
+				if userInput.Email != "" {
+					updates.Email = &userInput.Email
+				}
+			case "password":
+				// Handle password update (only for existing password users)
+				if authMethod := userInput.AuthMethod; authMethod != nil {
+					if passwordAuth, ok := authMethod.(*genproto.UserInput_Password); ok {
+						hashedPassword, err := passwords.HashPassword(passwordAuth.Password)
+						if err != nil {
+							return nil, status.Errorf(codes.Internal, "failed to hash password: %v", err)
+						}
+						updates.HashedPassword = &hashedPassword
+					}
+				}
+			case "sso_id":
+				// Handle SSO ID update (only for existing SSO users)
+				if authMethod := userInput.AuthMethod; authMethod != nil {
+					if ssoAuth, ok := authMethod.(*genproto.UserInput_SsoId); ok {
+						updates.SsoID = &ssoAuth.SsoId
+					}
+				}
+			}
+		}
+	} else {
+		// No field mask provided, update all non-empty fields
+		if userInput.FirstName != "" {
+			updates.FirstName = &userInput.FirstName
+		}
+		if userInput.LastName != "" {
+			updates.LastName = &userInput.LastName
+		}
+		if userInput.Email != "" {
+			updates.Email = &userInput.Email
+		}
+		
+		// Handle authentication method updates with business logic validation
+		if authMethod := userInput.AuthMethod; authMethod != nil {
+			// Get current user to check auth method
+			currentUser, err := s.store.GetByID(ctx, userID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return nil, status.Errorf(codes.NotFound, "user not found")
+				}
+				return nil, status.Errorf(codes.Internal, "failed to get current user: %v", err)
+			}
+			
+			userAuthResp, err := s.store.GetUserForAuth(ctx, currentUser.Email)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to get user auth info: %v", err)
+			}
+			
+			isCurrentlyPasswordUser := userAuthResp.PasswordHash != ""
+			
+			switch auth := authMethod.(type) {
+			case *genproto.UserInput_Password:
+				if !isCurrentlyPasswordUser {
+					return nil, status.Errorf(codes.PermissionDenied, 
+						"SSO users cannot set passwords. Please manage your password through your identity provider.")
+				}
+				hashedPassword, err := passwords.HashPassword(auth.Password)
+				if err != nil {
+					return nil, status.Errorf(codes.Internal, "failed to hash password: %v", err)
+				}
+				updates.HashedPassword = &hashedPassword
+			case *genproto.UserInput_SsoId:
+				if isCurrentlyPasswordUser {
+					return nil, status.Errorf(codes.PermissionDenied, 
+						"Password users cannot switch to SSO authentication. Please contact support for account migration.")
+				}
+				updates.SsoID = &auth.SsoId
+			}
+		}
+	}
+
+	// Call the store layer to perform the update (simplified since we prevent auth method switching)
+	updatedUser, err := s.store.Update(ctx, userID, updates, updateMask)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "user not found")
+		}
+		if errors.Is(err, types.ErrDuplicateEntry) {
+			return nil, status.Errorf(codes.AlreadyExists, "email is already in use")
+		}
+		return nil, status.Errorf(codes.Internal, "failed to update user: %v", err)
+	}
+
+	return updatedUser, nil
+}
+
+// DeleteUser handles the soft deletion of a user
+func (s *service) DeleteUser(ctx context.Context, req *genproto.DeleteUserRequest) error {
+	// Validate request
+	if req.GetUserId() == "" {
+		return status.Errorf(codes.InvalidArgument, "user ID is required")
+	}
+
+	// Parse the user ID
+	userID, err := uuid.FromString(req.GetUserId())
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "invalid user ID format: %v", err)
+	}
+
+	// Call the store layer to perform the soft delete
+	err = s.store.Delete(ctx, userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return status.Errorf(codes.NotFound, "user not found or already deleted")
+		}
+		return status.Errorf(codes.Internal, "failed to delete user: %v", err)
+	}
+
+	return nil
 }

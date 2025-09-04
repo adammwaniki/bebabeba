@@ -13,6 +13,7 @@ import (
 	"github.com/adammwaniki/bebabeba/services/user/proto/genproto"
 	"github.com/go-sql-driver/mysql"
 	"github.com/gofrs/uuid/v5"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -471,4 +472,232 @@ func (s *store) ListUsers(ctx context.Context, pageSize int32, pageToken string,
 	}
 
 	return users, nextPageToken, nil
+}
+
+const updateUserQuery = `
+UPDATE users 
+SET first_name = CASE WHEN ? THEN ? ELSE first_name END,
+    last_name = CASE WHEN ? THEN ? ELSE last_name END,
+    email = CASE WHEN ? THEN ? ELSE email END,
+    password_hash = CASE WHEN ? THEN ? ELSE password_hash END,
+    sso_id = CASE WHEN ? THEN ? ELSE sso_id END,
+    updated_at = ?
+WHERE external_id = ?`
+
+const getUserForUpdateQuery = `
+SELECT
+  LOWER(
+        CONCAT(
+            HEX(SUBSTR(external_id, 1, 4)), '-',
+            HEX(SUBSTR(external_id, 5, 2)), '-',
+            HEX(SUBSTR(external_id, 7, 2)), '-',
+            HEX(SUBSTR(external_id, 9, 2)), '-',
+            HEX(SUBSTR(external_id, 11, 6))
+        )
+    ) AS external_id,
+  first_name,
+  last_name,
+  email,
+  status,
+  terms_accepted_at,
+  created_at,
+  updated_at
+FROM users
+WHERE external_id = ?
+LIMIT 1`
+
+// Update modifies an existing user's information based on the provided field mask
+func (s *store) Update(ctx context.Context, externalID uuid.UUID, updates types.UserUpdateFields, updateMask *fieldmaskpb.FieldMask) (*genproto.UpdateUserResponse, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer func() {
+		if rerr := tx.Rollback(); rerr != nil && !errors.Is(rerr, sql.ErrTxDone) {
+			fmt.Printf("rollback failed: %v\n", rerr)
+		}
+	}()
+
+	now := time.Now()
+
+	// Determine which fields to update based on the field mask or provided fields
+	updateFirstName := false
+	updateLastName := false
+	updateEmail := false
+	updatePassword := false
+	updateSsoID := false
+
+	if updateMask != nil {
+		for _, path := range updateMask.Paths {
+			switch path {
+			case "first_name":
+				updateFirstName = true
+			case "last_name":
+				updateLastName = true
+			case "email":
+				updateEmail = true
+			case "password":
+				updatePassword = true
+			case "sso_id":
+				updateSsoID = true
+			}
+		}
+	} else {
+		// If no field mask is provided, update all non-nil fields
+		updateFirstName = updates.FirstName != nil
+		updateLastName = updates.LastName != nil
+		updateEmail = updates.Email != nil
+		updatePassword = updates.HashedPassword != nil
+		updateSsoID = updates.SsoID != nil
+	}
+
+	// Prepare values for conditional update
+	var firstNameValue, lastNameValue, emailValue string
+	var passwordValue, ssoIDValue sql.NullString
+
+	if updateFirstName && updates.FirstName != nil {
+		firstNameValue = *updates.FirstName
+	}
+	if updateLastName && updates.LastName != nil {
+		lastNameValue = *updates.LastName
+	}
+	if updateEmail && updates.Email != nil {
+		emailValue = *updates.Email
+	}
+	
+	// Handle authentication method updates (simplified - no switching allowed)
+	if updatePassword && updates.HashedPassword != nil {
+		passwordValue = sql.NullString{String: *updates.HashedPassword, Valid: true}
+	}
+	
+	if updateSsoID && updates.SsoID != nil {
+		ssoIDValue = sql.NullString{String: *updates.SsoID, Valid: true}
+	}
+
+	// Execute the update query
+	result, err := tx.ExecContext(ctx, updateUserQuery,
+		updateFirstName, firstNameValue,
+		updateLastName, lastNameValue,
+		updateEmail, emailValue,
+		updatePassword, passwordValue,
+		updateSsoID, ssoIDValue,
+		now, // updated_at
+		externalID.Bytes(),
+	)
+	if err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 { // 1062 is duplicate entry error
+			return nil, types.ErrDuplicateEntry
+		}
+		return nil, fmt.Errorf("updating user data: %w", err)
+	}
+
+	// Check if any rows were affected
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("checking affected rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return nil, sql.ErrNoRows // User not found
+	}
+
+	// Fetch the updated user data
+	var user genproto.UpdateUserResponse
+	var (
+		dbExternalID    string
+		dbFirstName     string
+		dbLastName      string
+		dbEmail         string
+		statusStr       string
+		termsAcceptedAt time.Time
+		createdAt       time.Time
+		updatedAt       sql.NullTime
+	)
+
+	err = tx.QueryRowContext(ctx, getUserForUpdateQuery, externalID.Bytes()).Scan(
+		&dbExternalID,
+		&dbFirstName,
+		&dbLastName,
+		&dbEmail,
+		&statusStr,
+		&termsAcceptedAt,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("fetching updated user data: %w", err)
+	}
+
+	// Populate the UpdateUserResponse fields
+	user.Id = dbExternalID
+	user.FirstName = dbFirstName
+	user.LastName = dbLastName
+	user.Email = dbEmail
+
+	// Convert status string to enum
+	statusVal, ok := genproto.UserStatusEnum_value[statusStr]
+	if !ok {
+		return nil, fmt.Errorf("invalid status value found in DB: %s", statusStr)
+	}
+	user.Status = genproto.UserStatusEnum(statusVal)
+
+	// Convert Go time.Time to Protobuf Timestamp
+	user.TermsAcceptedAt = timestamppb.New(termsAcceptedAt)
+	user.CreatedAt = timestamppb.New(createdAt)
+
+	// Convert nullable updatedAt to protobuf timestamp
+	if updatedAt.Valid {
+		user.UpdatedAt = timestamppb.New(updatedAt.Time)
+	}
+
+	// Commit the transaction
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing transaction: %w", err)
+	}
+
+	return &user, nil
+}
+
+
+const softDeleteUserQuery = `
+UPDATE users 
+SET status = 'CLOSED',
+    updated_at = ?
+WHERE external_id = ? AND status != 'CLOSED'`
+
+// Delete performs a soft delete by setting the user status to CLOSED
+func (s *store) Delete(ctx context.Context, externalID uuid.UUID) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer func() {
+		if rerr := tx.Rollback(); rerr != nil && !errors.Is(rerr, sql.ErrTxDone) {
+			fmt.Printf("rollback failed: %v\n", rerr)
+		}
+	}()
+
+	now := time.Now()
+
+	// Execute soft delete by updating status to CLOSED
+	result, err := tx.ExecContext(ctx, softDeleteUserQuery, now, externalID.Bytes())
+	if err != nil {
+		return fmt.Errorf("soft deleting user: %w", err)
+	}
+
+	// Check if any rows were affected
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking affected rows: %w", err)
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows // User not found or already deleted
+	}
+
+	// Commit the transaction
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("committing transaction: %w", err)
+	}
+
+	return nil
 }

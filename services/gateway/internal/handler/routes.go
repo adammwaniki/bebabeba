@@ -17,9 +17,8 @@ func SetupAPIRoutes(mux *http.ServeMux, userHandler *UserHandler, healthHandler 
     //apiV1Router.HandleFunc("POST /users/login", authHandler.HandleLogin) // Authenticated user
     apiV1Router.HandleFunc("GET /users/{id}", userHandler.HandleGetUserByID)
     apiV1Router.HandleFunc("GET /users", userHandler.HandleListUsers) 
-    apiV1Router.HandleFunc("PUT /users/{id}", userHandler.HandleFullyUpdateUserByID)
-    apiV1Router.HandleFunc("PATCH /users/{id}", userHandler.HandlePartiallyUpdateUserByID)
-    apiV1Router.HandleFunc("DELETE /users/{id}", userHandler.HandleSoftDeleteUserByID)
+    apiV1Router.HandleFunc("PUT /users/{id}", userHandler.HandleUpdateUserByID)
+    apiV1Router.HandleFunc("DELETE /users/{id}", userHandler.HandleDeleteUserByID)
 
     // Google OAuth2 authentication endpoints
 	apiV1Router.HandleFunc("GET /auth/google/login", userHandler.HandleGoogleLogin)

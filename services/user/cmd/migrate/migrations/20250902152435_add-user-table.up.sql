@@ -16,11 +16,7 @@ CREATE TABLE IF NOT EXISTS users(
         ) NOT NULL DEFAULT 'ACTIVE',
     terms_accepted_at DATETIME NOT NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),  -- Microsecond precision
-    updated_at DATETIME(6) NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP(6),
-
--- Add a CHECK constraint to ensure either password or sso_id is present, but not both
-CONSTRAINT chk_auth_method CHECK (
-    (password_hash IS NOT NULL AND sso_id IS NULL) OR
-    (password_hash IS NULL AND sso_id IS NOT NULL)
-)
+    updated_at DATETIME(6) NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP(6)
 );
+
+

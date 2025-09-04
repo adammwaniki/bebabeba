@@ -1,4 +1,4 @@
-//services/user/internal/types/types.go
+// services/user/internal/types/types.go
 package types
 
 import (
@@ -8,6 +8,7 @@ import (
 
 	"github.com/adammwaniki/bebabeba/services/user/proto/genproto"
 	"github.com/gofrs/uuid/v5"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // Business logic interface
@@ -17,6 +18,8 @@ type UserService interface {
     GetUserBySSOID(ctx context.Context, req *genproto.GetUserBySSOIDRequest) (*genproto.GetUserResponse, error)
 	GetUserForAuth(ctx context.Context, req *genproto.GetUserForAuthRequest) (*genproto.AuthUserResponse, error)
 	ListUsers(ctx context.Context, req *genproto.ListUsersRequest) (*genproto.ListUsersResponse, error)
+	UpdateUser(ctx context.Context, req *genproto.UpdateUserRequest) (*genproto.UpdateUserResponse, error)
+	DeleteUser(ctx context.Context, req *genproto.DeleteUserRequest) error
 }
 
 type UserStore interface {
@@ -32,8 +35,18 @@ type UserStore interface {
     GetUserBySSOID(ctx context.Context, ssoID string) (*genproto.GetUserResponse, error)
 	GetUserForAuth(ctx context.Context, email string) (*genproto.AuthUserResponse, error)
 	ListUsers(ctx context.Context, pageSize int32, pageToken string, statusFilter *genproto.UserStatusEnum, nameFilter string) ([]*genproto.GetUserResponse, string, error)
+	Update(ctx context.Context, externalID uuid.UUID, updates UserUpdateFields, updateMask *fieldmaskpb.FieldMask) (*genproto.UpdateUserResponse, error)
+	Delete(ctx context.Context, externalID uuid.UUID) error
 }
 
+// UserUpdateFields represents the fields that can be updated for a user
+type UserUpdateFields struct {
+	FirstName      *string
+	LastName       *string
+	Email          *string
+	HashedPassword *string // For password updates
+	SsoID          *string // For SSO ID updates
+}
 // gRPC handler interface
 type UserServiceServer interface {
     genproto.UserServiceServer

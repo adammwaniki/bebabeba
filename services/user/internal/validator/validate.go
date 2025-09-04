@@ -1,4 +1,4 @@
-//services/user/internal/validator/validate.go
+// services/user/internal/validator/validate.go
 package validator
 
 import (
@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/adammwaniki/bebabeba/services/user/proto/genproto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 type ValidationError struct {
@@ -192,72 +193,6 @@ func ValidatePassword(field string, password string) error {
 	return nil
 }
 
-// UserInput handles the Update in CRUD for users
-// Combined Validation and Normalisation helper for all user input
-func ValidateAndNormalizeUserInput(user *genproto.UserInput) error {
-	// Validate and normalize first name
-	rawFirstName := user.GetFirstName()
-	if err := ValidateName("first_name", rawFirstName); err != nil {
-		return err
-	}
-	user.FirstName = NormalizeName(rawFirstName) // Set normalized name
-
-	// Validate and normalize last name
-	rawLastName := user.GetLastName()
-	if err := ValidateName("last_name", rawLastName); err != nil {
-		return err
-	}
-	user.LastName = NormalizeName(rawLastName) // Set normalized name
-
-	// Validate email
-	rawEmail := user.GetEmail()
-	if err := ValidateEmails("email", rawEmail); err != nil {
-		return err
-	}
-	user.Email = strings.TrimSpace(rawEmail) // Set trimmed email
-
-	// Validate authentication method (oneof password or sso_id)
-	authMethod := user.GetAuthMethod()
-
-	if authMethod == nil {
-		// This means neither password nor sso_id is provided in the oneof.
-		// For CreateUser, this is an error.
-		// For UpdateUser, this might be acceptable if auth_method is not being updated
-		// (i.e., not in the update_mask). Assuming this function is called when
-		// an auth method IS expected or being explicitly set/updated.
-		return ValidationError{
-			Field:   "auth_method", // General field name for the oneof
-			Message: "either password or sso_id must be provided",
-		}
-	}
-
-	switch auth := authMethod.(type) {
-	case *genproto.UserInput_Password:
-		if err := ValidatePassword("password", auth.Password); err != nil {
-			return err
-		}
-		// Our ValidatePassword checks for empty after potential implicit trim if password was " ".
-	case *genproto.UserInput_SsoId:
-		if err := ValidateSSOID("sso_id", auth.SsoId); err != nil {
-			return err
-		}
-		// SSO IDs are opaque and are typically used as-is.
-		// We could trim here if we wanted to:
-		// auth.SsoId = strings.TrimSpace(auth.SsoId)
-		// user.AuthMethod = &genproto.UserInput_SsoId{SsoId: strings.TrimSpace(auth.SsoId)} // Re-assign to update
-	default:
-		// This case should ideally not be reached if authMethod was not nil and
-		// the oneof only contains Password and SsoId.
-		// It's a safeguard for future or unexpected types.
-		return ValidationError{
-			Field:   "auth_method",
-			Message: "an unknown authentication method was provided",
-		}
-	}
-
-	return nil
-}
-
 // RegistrationInput handles the Create in CRUD for users
 // Combined Validation and Normalisation helper for all registration input
 func ValidateAndNormalizeRegistrationInput(req *genproto.RegistrationRequest) error {
@@ -309,4 +244,92 @@ func ValidateAndNormalizeRegistrationInput(req *genproto.RegistrationRequest) er
     }
 
     return nil
+}
+
+// ValidateUserInput validates a UserInput message for update operations
+func ValidateUserInput(userInput *genproto.UserInput, updateMask *fieldmaskpb.FieldMask) error {
+	if userInput == nil {
+		return fmt.Errorf("user input cannot be nil")
+	}
+
+	// If update mask is provided, only validate fields specified in the mask
+	if updateMask != nil {
+		for _, path := range updateMask.Paths {
+			switch path {
+			case "first_name":
+				if userInput.FirstName != "" {
+					if err := ValidateName("first_name", userInput.FirstName); err != nil {
+						return err
+					}
+				}
+			case "last_name":
+				if userInput.LastName != "" {
+					if err := ValidateName("last_name", userInput.LastName); err != nil {
+						return err
+					}
+				}
+			case "email":
+				if userInput.Email != "" {
+					if err := ValidateEmails("email", userInput.Email); err != nil {
+						return err
+					}
+				}
+			case "password":
+				if authMethod := userInput.AuthMethod; authMethod != nil {
+					if passwordAuth, ok := authMethod.(*genproto.UserInput_Password); ok {
+						if err := ValidatePassword("password", passwordAuth.Password); err != nil {
+							return err
+						}
+					}
+				}
+			case "sso_id":
+				if authMethod := userInput.AuthMethod; authMethod != nil {
+					if ssoAuth, ok := authMethod.(*genproto.UserInput_SsoId); ok {
+						if err := ValidateSSOID("sso_id", ssoAuth.SsoId); err != nil {
+							return err
+						}
+					}
+				}
+			default:
+				return fmt.Errorf("unsupported field path: %s", path)
+			}
+		}
+	} else {
+		// No field mask provided, validate all non-empty fields
+		if userInput.FirstName != "" {
+			if err := ValidateName("first_name", userInput.FirstName); err != nil {
+				return err
+			}
+		}
+		
+		if userInput.LastName != "" {
+			if err := ValidateName("last_name", userInput.LastName); err != nil {
+				return err
+			}
+		}
+		
+		if userInput.Email != "" {
+			if err := ValidateEmails("email", userInput.Email); err != nil {
+				return err
+			}
+		}
+
+		// Validate authentication method if provided (business logic will handle switching)
+		if authMethod := userInput.AuthMethod; authMethod != nil {
+			switch auth := authMethod.(type) {
+			case *genproto.UserInput_Password:
+				if err := ValidatePassword("password", auth.Password); err != nil {
+					return err
+				}
+			case *genproto.UserInput_SsoId:
+				if err := ValidateSSOID("sso_id", auth.SsoId); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("invalid authentication method")
+			}
+		}
+	}
+
+	return nil
 }

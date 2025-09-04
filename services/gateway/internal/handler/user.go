@@ -1,4 +1,4 @@
-//services/gateway/internal/handler/user.go
+// services/gateway/internal/handler/user.go
 package handler
 
 import (
@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // UserHandler handles HTTP requests for the user.UserService, including OAuth.
@@ -307,25 +308,106 @@ func (h *UserHandler) HandleGoogleCallback(w http.ResponseWriter, r *http.Reques
 
 }
 
-// TODO: Implement update and delete handlers
+// HandleUpdateUserByID handles PUT requests to fully update a user.
+func (h *UserHandler) HandleUpdateUserByID(w http.ResponseWriter, r *http.Request) {
+	userIDStr := r.PathValue("id")
+	if userIDStr == "" {
+		utils.WriteError(w, http.StatusBadRequest, errors.New("user ID is required"))
+		return
+	}
 
-// HandlePartiallyUpdateUserByID handles PATCH requests to partially update a user.
-func (h *UserHandler) HandlePartiallyUpdateUserByID(w http.ResponseWriter, r *http.Request) {
-    // userId := r.PathValue("id")
-    // Implement logic for partial updates, likely involving FieldMask.
-    utils.WriteError(w, http.StatusNotImplemented, errors.New("partial update not implemented"))
+	// Parse the UUID string from the URL path
+	parsedUUID, err := uuid.FromString(userIDStr)
+	if err != nil {
+		utils.WriteError(w, http.StatusBadRequest, fmt.Errorf("invalid UUID format: %w", err))
+		return
+	}
+
+	// Read and validate request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		utils.WriteError(w, http.StatusBadRequest, fmt.Errorf("failed to read request body: %w", err))
+		return
+	}
+	defer r.Body.Close()
+
+	// Parse the request payload
+	var updateRequest struct {
+		User       *userproto.UserInput `json:"user"`
+		UpdateMask []string             `json:"update_mask,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &updateRequest); err != nil {
+		utils.WriteError(w, http.StatusBadRequest, fmt.Errorf("invalid request format: %w", err))
+		return
+	}
+
+	if updateRequest.User == nil {
+		utils.WriteError(w, http.StatusBadRequest, errors.New("user data is required"))
+		return
+	}
+
+	// Create field mask if provided
+	var fieldMask *fieldmaskpb.FieldMask
+	if len(updateRequest.UpdateMask) > 0 {
+		fieldMask = &fieldmaskpb.FieldMask{
+			Paths: updateRequest.UpdateMask,
+		}
+	}
+
+	// Create the gRPC request with the user ID from the URL path
+	grpcReq := &userproto.UpdateUserRequest{
+		UserId:     parsedUUID.String(), // This was missing!
+		User:       updateRequest.User,
+		UpdateMask: fieldMask,
+	}
+
+	// Set a context with timeout for the gRPC call
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	// Call the gRPC service's UpdateUser method
+	resp, err := h.userClient.UpdateUser(ctx, grpcReq)
+	if err != nil {
+		utils.HandleGRPCError(w, err)
+		return
+	}
+
+	// Return the successful response
+	utils.WriteProtoJSON(w, http.StatusOK, resp)
 }
 
-// HandleFullyUpdateUserByID handles PUT requests to fully update a user.
-func (h *UserHandler) HandleFullyUpdateUserByID(w http.ResponseWriter, r *http.Request) {
-    // userId := r.PathValue("id")
-    // Implement logic for full updates.
-    utils.WriteError(w, http.StatusNotImplemented, errors.New("full update not implemented"))
-}
+// HandleDeleteUserByID handles DELETE requests to soft-delete a user.
+func (h *UserHandler) HandleDeleteUserByID(w http.ResponseWriter, r *http.Request) {
+	userIDStr := r.PathValue("id")
+	if userIDStr == "" {
+		utils.WriteError(w, http.StatusBadRequest, errors.New("user ID is required"))
+		return
+	}
 
-// HandleSoftDeleteUserByID handles DELETE requests to soft-delete a user.
-func (h *UserHandler) HandleSoftDeleteUserByID(w http.ResponseWriter, r *http.Request) {
-    // userId := r.PathValue("id")
-    // Implement soft delete logic.
-    utils.WriteError(w, http.StatusNotImplemented, errors.New("soft delete not implemented"))
+	// Parse the UUID string from the URL path
+	parsedUUID, err := uuid.FromString(userIDStr)
+	if err != nil {
+		utils.WriteError(w, http.StatusBadRequest, fmt.Errorf("invalid UUID format: %w", err))
+		return
+	}
+
+	// Create the gRPC request message
+	grpcReq := &userproto.DeleteUserRequest{
+		UserId: parsedUUID.String(),
+	}
+
+	// Set a context with timeout for the gRPC call
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	// Call the gRPC service's DeleteUser method
+	_, err = h.userClient.DeleteUser(ctx, grpcReq)
+	if err != nil {
+		utils.HandleGRPCError(w, err)
+		return
+	}
+
+	// Return success with no content
+	w.WriteHeader(http.StatusNoContent)
 }
