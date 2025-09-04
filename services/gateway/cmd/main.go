@@ -1,8 +1,9 @@
-//services/gateway/cmd/main.go
+// services/gateway/cmd/main.go
 package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"net/http"
@@ -11,8 +12,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/adammwaniki/bebabeba/services/auth/authn/jwt"
+	"github.com/adammwaniki/bebabeba/services/auth/session"
 	"github.com/adammwaniki/bebabeba/services/gateway/internal/handler"
+	"github.com/adammwaniki/bebabeba/services/gateway/internal/middleware"
 	userproto "github.com/adammwaniki/bebabeba/services/user/proto/genproto"
+	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/joho/godotenv/autoload"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -25,78 +30,129 @@ var (
 	userGRPCAddr = os.Getenv("USER_GRPC_ADDR")
 	gatewayAddr  = os.Getenv("GATEWAY_HTTP_ADDR")
 
-    // Google OAuth2 credentials and redirect URL
+	// Google OAuth2 credentials
 	googleClientID     = os.Getenv("GOOGLE_CLIENT_ID")
 	googleClientSecret = os.Getenv("GOOGLE_CLIENT_SECRET")
-	// The registered URL in Google Cloud Console for the project's OAuth2 client.
-	// It should point to the endpoint where Google redirects after authorization.
 	googleRedirectURL  = os.Getenv("GOOGLE_REDIRECT_URL")
+
+	// JWT configuration
+	jwtSecret = os.Getenv("JWT_SECRET")
+	jwtIssuer = os.Getenv("JWT_ISSUER")
+
+	// Database configuration for sessions
+	dbDSN = os.Getenv("SESSIONS_DB_DSN") // Using the same DB as user service for now - I might use redis later for speed
 )
 
-
 func main() {
-	// Create gRPC connection to the User Service WITH the interceptor
-    userConn, err := grpc.NewClient(
-        userGRPCAddr,
-        grpc.WithTransportCredentials(insecure.NewCredentials()),
-    )
-    if err != nil {
-        log.Fatal("Failed to dial coreuser service: ", err)
-    }
-    defer userConn.Close()
+	// Validate required environment variables
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET environment variable is required")
+	}
+	if jwtIssuer == "" {
+		jwtIssuer = "bebabeba-gateway" // Default issuer
+	}
+	if dbDSN == "" {
+		dbDSN = os.Getenv("DB_DSN") // Fallback to user service DB
+		if dbDSN == "" {
+			log.Fatal("SESSIONS_DB_DSN or DB_DSN environment variable is required")
+		}
+	}
 
-    // Create user service gRPC client and health client.
+	// Initialize database connection for session management
+	db, err := sql.Open("mysql", dbDSN+"?parseTime=true&loc=Local")
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer db.Close()
+
+	// Test database connection
+	if err := db.Ping(); err != nil {
+		log.Fatalf("Failed to ping database: %v", err)
+	}
+
+	// Initialize JWT service
+	jwtService := jwt.NewJWTService(jwtSecret, jwtIssuer)
+	jwtService.SetTokenTTL(15*time.Minute, 7*24*time.Hour) // 15 min access, 7 day refresh
+
+	// Initialize session manager
+	sessionManager := session.NewSessionManager(db, jwtService)
+
+	// Start cleanup goroutine for expired sessions
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour) // Clean up every hour
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := sessionManager.CleanupExpiredSessions(ctx); err != nil {
+				log.Printf("Failed to cleanup expired sessions: %v", err)
+			}
+			cancel()
+		}
+	}()
+
+	// Create gRPC connection to User Service
+	userConn, err := grpc.NewClient(
+		userGRPCAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		log.Fatal("Failed to dial user service: ", err)
+	}
+	defer userConn.Close()
+
+	// Create clients
 	userClient := userproto.NewUserServiceClient(userConn)
 	userHealth := grpc_health_v1.NewHealthClient(userConn)
 
-    // Configure Google OAuth2.
+	// Configure Google OAuth2
 	googleOAuthConfig := &oauth2.Config{
 		ClientID:     googleClientID,
 		ClientSecret: googleClientSecret,
 		RedirectURL:  googleRedirectURL,
-		Scopes:       []string{"openid", "email", "profile"}, // Standard OIDC scopes
+		Scopes:       []string{"openid", "email", "profile"},
 		Endpoint:     google.Endpoint,
 	}
 
-	// Setup handlers
-    healthHandler := handler.NewHealthHandler(userHealth)
+	// Initialize handlers with session management
+	healthHandler := handler.NewHealthHandler(userHealth)
 	userHandler := handler.NewUserHandler(userClient, googleOAuthConfig)
+	authHandler := handler.NewAuthHandler(userClient, sessionManager, jwtService)
+	
+	// Initialize authentication middleware with session support
+	authMiddleware := middleware.NewAuthMiddleware(jwtService, sessionManager)
 
-    // Configure server
-    mux := http.NewServeMux()
-    handler.SetupAPIRoutes(mux, userHandler, healthHandler)
-    
-    server := &http.Server{
-        Addr:    gatewayAddr,
-        Handler: mux,
-    }
+	// Configure server
+	mux := http.NewServeMux()
+	handler.SetupAPIRoutes(mux, userHandler, authHandler, healthHandler, authMiddleware, sessionManager)
 
-    // Graceful shutdown setup: listen for termination signals
-    done := make(chan os.Signal, 1)
-    signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	server := &http.Server{
+		Addr:    gatewayAddr,
+		Handler: mux,
+	}
 
-    // Start the HTTP server in a goroutine
-    go func() {
-        log.Printf("Gateway server starting on %s", gatewayAddr)
-        if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// Graceful shutdown setup
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start server
+	go func() {
+		log.Printf("Gateway server starting on %s", gatewayAddr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("Server failed: %v", err)
 		}
-    }()
+	}()
 
-    // Wait for shutdown signal
-    <-done
-    log.Println("Server shutting down...")
+	// Wait for shutdown signal
+	<-done
+	log.Println("Server shutting down...")
 
-    // Mark service as not ready to gracefully stop new requests
-    healthHandler.MarkNotReady()
+	healthHandler.MarkNotReady()
 
-    // Allow existing requests to finish within a timeout
-    ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-    defer cancel()
-    
-    if err := server.Shutdown(ctx); err != nil {
-        log.Printf("Server shutdown error: %v", err)
-    }
-    log.Println("Server stopped")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("Server shutdown error: %v", err)
+	}
+	log.Println("Server stopped")
 }
-

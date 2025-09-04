@@ -69,6 +69,27 @@ func (h *grpcHandler) CreateUser(ctx context.Context, req *genproto.CreateUserRe
     return createdUser, nil
 }
 
+// GetUserForAuth handles the gRPC request to get user authentication data
+func (h *grpcHandler) GetUserForAuth(ctx context.Context, req *genproto.GetUserForAuthRequest) (*genproto.AuthUserResponse, error) {
+    log.Printf("Handling GetUserForAuth gRPC request for email: %s", req.GetEmail())
+    
+    // Call the service layer to get the user for authentication
+    user, err := h.service.GetUserForAuth(ctx, req)
+    if err != nil {
+        // If the error from the service layer is already a gRPC status error, return it directly
+        if st, ok := status.FromError(err); ok {
+            log.Printf("GetUserForAuth failed from service layer with gRPC status: %v", st.Code())
+            return nil, st.Err()
+        }
+        // For any other unexpected errors from the service layer, log and return Internal
+        log.Printf("GetUserForAuth failed from service layer with unexpected error: %v", err)
+        return nil, status.Error(codes.Internal, "failed to get user for authentication")
+    }
+    
+    log.Printf("GetUserForAuth successful for email: %s", req.GetEmail())
+    return user, nil
+}
+
 // GetUserByID handles the gRPC request to retrieve a user by their external UUID.
 func (h *grpcHandler) GetUserByID(ctx context.Context, req *genproto.GetUserRequest) (*genproto.GetUserResponse, error) {
     log.Printf("Handling GetUserByID gRPC request for ID : %s", uuid.FromStringOrNil(req.UserId))

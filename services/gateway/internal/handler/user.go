@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/adammwaniki/bebabeba/services/auth/authn/jwt"
+	"github.com/adammwaniki/bebabeba/services/auth/session"
 	"github.com/adammwaniki/bebabeba/services/common/utils"
 	userproto "github.com/adammwaniki/bebabeba/services/user/proto/genproto"
 	"github.com/gofrs/uuid/v5"
@@ -32,6 +34,13 @@ type UserHandler struct {
 	// In production, we shall use a secure session store (e.g., Redis, database)
 	// to prevent CSRF and ensure state persistence across redirects.
 	oauthStates map[string]string // map[state]redirect_url
+}
+
+// LoginResponse for consistency across handlers
+type LoginResponse struct {
+	User         *userproto.GetUserResponse `json:"user"`
+	TokenData    *jwt.TokenPair             `json:"token_data"`
+	Message      string                     `json:"message"`
 }
 
 // NewUserHandler creates a new UserHandler.
@@ -171,21 +180,21 @@ func (h *UserHandler) HandleGoogleLogin(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 }
 
-// HandleGoogleCallback handles the redirect from Google after user authorization.
-func (h *UserHandler) HandleGoogleCallback(w http.ResponseWriter, r *http.Request) {
+// HandleGoogleCallbackWithJWT handles the redirect from Google after user authorization with JWT and session management
+func (h *UserHandler) HandleGoogleCallbackWithJWT(sessionManager *session.SessionManager, w http.ResponseWriter, r *http.Request) {
 	log.Println("DEBUG: HandleGoogleCallback initiated.")
 	
-	// Verify the 'state' parameter to prevent CSRF.
+	// Verify the 'state' parameter to prevent CSRF
 	state := r.URL.Query().Get("state")
 	log.Printf("DEBUG: Received state parameter: %s", state)
 	if _, ok := h.oauthStates[state]; !ok {
 		utils.WriteError(w, http.StatusBadRequest, errors.New("invalid or missing OAuth state parameter"))
 		return
 	}
-	delete(h.oauthStates, state) // State used, delete it.
+	delete(h.oauthStates, state)
 	log.Println("DEBUG: OAuth state verified and removed.")
 
-	// Check for errors from Google (e.g., user denied access).
+	// Check for errors from Google
 	if authErr := r.URL.Query().Get("error"); authErr != "" {
 		errorDescription := r.URL.Query().Get("error_description")
 		log.Printf("ERROR: OAuth authorization failed from Google: %s - %s", authErr, errorDescription)
@@ -193,7 +202,7 @@ func (h *UserHandler) HandleGoogleCallback(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Get the authorization code.
+	// Get the authorization code
 	code := r.URL.Query().Get("code")
 	log.Printf("DEBUG: Received authorization code (first 10 chars): %s...", code[:min(10, len(code))])
 	if code == "" {
@@ -201,112 +210,130 @@ func (h *UserHandler) HandleGoogleCallback(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Exchange the authorization code for an OAuth2 token.
+	// Exchange the authorization code for an OAuth2 token
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	log.Println("DEBUG: Attempting to exchange authorization code for token...")
 	token, err := h.googleOAuthConfig.Exchange(ctx, code)
 	if err != nil {
-		log.Printf("ERROR: Failed to exchange authorization code for token: %v (Type: %T)", err, err)
+		log.Printf("ERROR: Failed to exchange authorization code for token: %v", err)
 		utils.WriteError(w, http.StatusInternalServerError, fmt.Errorf("failed to exchange authorization code for token: %w", err))
 		return
 	}
 	log.Println("DEBUG: Successfully exchanged code for token.")
 
-	// Use the token to get user information from Google's UserInfo endpoint.
+	// Get user information from Google
 	userInfoClient := h.googleOAuthConfig.Client(ctx, token)
 	log.Println("DEBUG: Attempting to fetch user info from Google UserInfo endpoint...")
-	userInfoResp, err := userInfoClient.Get("https://www.googleapis.com/oauth2/v3/userinfo") // Standard OpenID Connect userinfo endpoint
+	userInfoResp, err := userInfoClient.Get("https://www.googleapis.com/oauth2/v3/userinfo")
 	if err != nil {
-		log.Printf("ERROR: Failed to get user info from Google: %v (Type: %T)", err, err)
+		log.Printf("ERROR: Failed to get user info from Google: %v", err)
 		utils.WriteError(w, http.StatusInternalServerError, fmt.Errorf("failed to get user info from Google: %w", err))
 		return
 	}
 	defer userInfoResp.Body.Close()
-	log.Printf("DEBUG: Received user info response from Google, Status: %d", userInfoResp.StatusCode)
 
 	if userInfoResp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(userInfoResp.Body)
 		log.Printf("ERROR: Google user info API returned non-200 status: %d, body: %s", userInfoResp.StatusCode, string(bodyBytes))
-		utils.WriteError(w, http.StatusInternalServerError, fmt.Errorf("google user info API returned non-200 status: %d, body: %s", userInfoResp.StatusCode, string(bodyBytes)))
+		utils.WriteError(w, http.StatusInternalServerError, fmt.Errorf("google user info API returned non-200 status: %d", userInfoResp.StatusCode))
 		return
 	}
 
 	var googleUserInfo struct {
-		ID        string `json:"sub"` // Google user ID, will be our sso_id
+		ID        string `json:"sub"`
 		Email     string `json:"email"`
 		FirstName string `json:"given_name"`
 		LastName  string `json:"family_name"`
-		// Add other fields you might need, e.g., "picture"
 	}
-	log.Println("DEBUG: Attempting to decode Google user info JSON.")
+	
 	if err := json.NewDecoder(userInfoResp.Body).Decode(&googleUserInfo); err != nil {
 		utils.WriteError(w, http.StatusInternalServerError, fmt.Errorf("failed to parse Google user info: %w", err))
 		return
 	}
-	log.Printf("DEBUG: Successfully decoded Google user info. Email: %s, SSO ID (sub): %s", googleUserInfo.Email, googleUserInfo.ID)
+	log.Printf("DEBUG: Successfully decoded Google user info. Email: %s, SSO ID: %s", googleUserInfo.Email, googleUserInfo.ID)
 
-	// Now, interact with your user.UserService to find or create the user.
-	// 1. Try to get user by SSO ID
-	// IMPORTANT: You need to add a GetUserBySSOID method to your user.proto
-	// and implement it in your user service and store.
+	// Try to get existing user by SSO ID
 	getUserReq := &userproto.GetUserBySSOIDRequest{SsoId: googleUserInfo.ID}
-	log.Printf("DEBUG: Calling user service GetUserBySSOID for SSO ID: %s", googleUserInfo.ID)
 	userResp, err := h.userClient.GetUserBySSOID(ctx, getUserReq)
 
 	if err != nil {
 		st, ok := status.FromError(err)
 		if ok && st.Code() == codes.NotFound {
-			// User not found, proceed to create a new user with SSO details.
-			log.Printf("DEBUG: User with SSO ID '%s' not found. Attempting to create new user.", googleUserInfo.ID)
+			// User not found, create new user
+			log.Printf("DEBUG: User with SSO ID '%s' not found. Creating new user.", googleUserInfo.ID)
 			createReq := &userproto.CreateUserRequest{
 				User: &userproto.RegistrationRequest{
 					FirstName: googleUserInfo.FirstName,
 					LastName:  googleUserInfo.LastName,
-					Email:     googleUserInfo.Email, // Email from Google for consistency
+					Email:     googleUserInfo.Email,
 					AuthMethod: &userproto.RegistrationRequest_SsoId{SsoId: googleUserInfo.ID},
 				},
 			}
-			log.Println("DEBUG: Calling user service CreateUser for new SSO user.")
+			
 			createResp, createErr := h.userClient.CreateUser(ctx, createReq)
 			if createErr != nil {
-				log.Printf("ERROR: Failed to create new SSO user: %v (Type: %T)", createErr, createErr)
-				utils.HandleGRPCError(w, createErr) // This should now correctly propagate gRPC errors
+				log.Printf("ERROR: Failed to create new SSO user: %v", createErr)
+				utils.HandleGRPCError(w, createErr)
 				return
 			}
-			log.Println("DEBUG: Successfully created new SSO user.")
-			// Map CreateUserResponse to GetUserResponse for consistent return type
+			
+			// Convert to GetUserResponse format
 			userResp = &userproto.GetUserResponse{
-                Id: createResp.Id,
-                FirstName: createResp.FirstName,
-                LastName: createResp.LastName,
-                Status: createResp.Status,
-                Email: createResp.Email,
-                TermsAcceptedAt: createResp.TermsAcceptedAt,
-                CreatedAt: createResp.CreatedAt,
-            }
-
+				Id: createResp.Id,
+				FirstName: createResp.FirstName,
+				LastName: createResp.LastName,
+				Status: createResp.Status,
+				Email: createResp.Email,
+				TermsAcceptedAt: createResp.TermsAcceptedAt,
+				CreatedAt: createResp.CreatedAt,
+			}
 		} else {
-			// Other gRPC error from GetUserBySSOID
-			log.Printf("ERROR: GetUserBySSOID returned unexpected gRPC error: %v (Type: %T)", err, err)
+			log.Printf("ERROR: GetUserBySSOID returned unexpected error: %v", err)
 			utils.HandleGRPCError(w, err)
 			return
 		}
 	}
 
-	// Check user status i.e., if active/pending/other
+	// Check user status
 	if userResp.GetStatus() != userproto.UserStatusEnum_ACTIVE {
-    utils.WriteError(w, http.StatusForbidden, errors.New("user account is not active"))
-    return
+		utils.WriteError(w, http.StatusForbidden, errors.New("user account is not active"))
+		return
 	}
 
-	// User found or successfully created.
-	// At this point, we'd typically establish a session (e.g., set a cookie, issue a JWT).
-	// For now we'll just return the user info until I implement JWT.
-	log.Printf("User successfully authenticated/created: %s (SSO ID: %s)", userResp.GetEmail(), googleUserInfo.ID)
-	utils.WriteProtoJSON(w, http.StatusOK, userResp)
+	// Create session with JWT tokens
+	sessionResp, err := sessionManager.CreateSession(
+		ctx,
+		userResp.Id,
+		userResp.Email,
+		userResp.FirstName,
+		userResp.LastName,
+		r,
+	)
+	if err != nil {
+		log.Printf("Failed to create session for SSO user: %v", err)
+		// Still return success but without session
+		utils.WriteProtoJSON(w, http.StatusOK, userResp)
+		return
+	}
 
+	// Return successful response with session and tokens
+	response := struct {
+		User         *userproto.GetUserResponse `json:"user"`
+		TokenData    *jwt.TokenPair             `json:"token_data"`
+		SessionID    string                     `json:"session_id"`
+		Message      string                     `json:"message"`
+	}{
+		User:      userResp,
+		TokenData: sessionResp.TokenData,
+		SessionID: sessionResp.Session.ID,
+		Message:   "SSO authentication successful",
+	}
+
+	log.Printf("User %s successfully authenticated via Google SSO with session %s", userResp.GetEmail(), sessionResp.Session.ID)
+	utils.WriteJSON(w, http.StatusOK, response)
 }
+
 
 // HandleUpdateUserByID handles PUT requests to fully update a user.
 func (h *UserHandler) HandleUpdateUserByID(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +384,7 @@ func (h *UserHandler) HandleUpdateUserByID(w http.ResponseWriter, r *http.Reques
 
 	// Create the gRPC request with the user ID from the URL path
 	grpcReq := &userproto.UpdateUserRequest{
-		UserId:     parsedUUID.String(), // This was missing!
+		UserId:     parsedUUID.String(),
 		User:       updateRequest.User,
 		UpdateMask: fieldMask,
 	}

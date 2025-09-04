@@ -1,48 +1,60 @@
-//services/gateway/internal/handler/routes.go
+// services/gateway/internal/handler/routes.go
 package handler
 
 import (
 	"net/http"
 
+	"github.com/adammwaniki/bebabeba/services/auth/session"
+	"github.com/adammwaniki/bebabeba/services/gateway/internal/middleware"
 )
 
-// setupAPIRoutes configures the HTTP routes for the API gateway.
-func SetupAPIRoutes(mux *http.ServeMux, userHandler *UserHandler, healthHandler *HealthHandler) {
+// SetupAPIRoutes configures the HTTP routes with JWT authentication and session management
+func SetupAPIRoutes(
+	mux *http.ServeMux, 
+	userHandler *UserHandler, 
+	authHandler *AuthHandler,
+	healthHandler *HealthHandler,
+	authMiddleware *middleware.AuthMiddleware,
+	sessionManager *session.SessionManager,
+) {
+	// API v1 subrouter - this handles requests AFTER /api/v1 is stripped
+	apiV1Router := http.NewServeMux()
 
-    // API v1 subrouter
-    apiV1Router := http.NewServeMux()
+	// Wrapper for Google OAuth callback with session management
+	googleCallbackWithSessions := func(w http.ResponseWriter, r *http.Request) {
+		userHandler.HandleGoogleCallbackWithJWT(sessionManager, w, r)
+	}
 
-    // User endpoints
-    apiV1Router.HandleFunc("POST /users/register", userHandler.HandleCreateUser)
-    //apiV1Router.HandleFunc("POST /users/login", authHandler.HandleLogin) // Authenticated user
-    apiV1Router.HandleFunc("GET /users/{id}", userHandler.HandleGetUserByID)
-    apiV1Router.HandleFunc("GET /users", userHandler.HandleListUsers) 
-    apiV1Router.HandleFunc("PUT /users/{id}", userHandler.HandleUpdateUserByID)
-    apiV1Router.HandleFunc("DELETE /users/{id}", userHandler.HandleDeleteUserByID)
-
-    // Google OAuth2 authentication endpoints
+	// PUBLIC endpoints (no authentication required) - these paths are seen WITHOUT /api/v1
+	apiV1Router.HandleFunc("POST /users/register", authHandler.HandleCreateUserWithJWT)
+	apiV1Router.HandleFunc("POST /auth/login", authHandler.HandleLogin)
+	apiV1Router.HandleFunc("POST /auth/refresh", authHandler.HandleRefresh)
 	apiV1Router.HandleFunc("GET /auth/google/login", userHandler.HandleGoogleLogin)
-	apiV1Router.HandleFunc("GET /auth/google/callback", userHandler.HandleGoogleCallback)
+	apiV1Router.HandleFunc("GET /auth/google/callback", googleCallbackWithSessions)
+	
+	// Health endpoints (public)
+	apiV1Router.HandleFunc("GET /healthz", healthHandler.LivenessCheck)
+	apiV1Router.HandleFunc("GET /readyz", healthHandler.ReadinessCheck)
 
-    // API Health endpoints
-    apiV1Router.HandleFunc("GET /healthz", healthHandler.LivenessCheck)
-    apiV1Router.HandleFunc("GET /readyz", healthHandler.ReadinessCheck)
+	// PROTECTED endpoints (require authentication) - wrappped with auth middleware individually
+	apiV1Router.HandleFunc("GET /auth/profile", authMiddleware.RequireAuth(authHandler.HandleProfile))
+	apiV1Router.HandleFunc("GET /auth/sessions", authMiddleware.RequireAuth(authHandler.HandleGetSessions))
+	apiV1Router.HandleFunc("POST /auth/logout", authMiddleware.RequireAuth(authHandler.HandleLogout))
+	apiV1Router.HandleFunc("GET /users/{id}", authMiddleware.RequireAuth(userHandler.HandleGetUserByID))
+	apiV1Router.HandleFunc("GET /users", authMiddleware.RequireAuth(userHandler.HandleListUsers))
+	apiV1Router.HandleFunc("PUT /users/{id}", authMiddleware.RequireAuth(userHandler.HandleUpdateUserByID))
+	apiV1Router.HandleFunc("DELETE /users/{id}", authMiddleware.RequireAuth(userHandler.HandleDeleteUserByID))
 
-	// Wrap the API router with the HTTP auth middleware
-    //authedAPIRouter := middleware.HTTPAuthToContextMiddleware(apiV1Router)
-
-    // Mount versioned and wrapped API at /api/v1/
-    //mux.Handle("/api/v1/", http.StripPrefix("/api/v1", authedAPIRouter))
+	// Mount the API router at /api/v1/ with prefix stripping
+	// The StripPrefix happens BEFORE routes are matched, so the apiV1Router sees clean paths
 	mux.Handle("/api/v1/", http.StripPrefix("/api/v1", apiV1Router))
-    // Redirect requests at /api/v1 to /api/v1/
-    mux.HandleFunc("/api/v1", func(w http.ResponseWriter, r *http.Request) {
-        http.Redirect(w, r, "/api/v1/", http.StatusPermanentRedirect)
-    })
+	
+	// Redirect requests at /api/v1 to /api/v1/
+	mux.HandleFunc("/api/v1", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/api/v1/", http.StatusPermanentRedirect)
+	})
 
-    // Gateway-level health for load balancers
-    mux.HandleFunc("/healthz", healthHandler.LivenessCheck)
-    mux.HandleFunc("/readyz", healthHandler.ReadinessCheck)
-
-    // TODO: Add authn/authz middleware
-    //mux.Use(authz.ClaimsMiddleware)
+	// Gateway-level health for load balancers (public) - these see the full path
+	mux.HandleFunc("/healthz", healthHandler.LivenessCheck)
+	mux.HandleFunc("/readyz", healthHandler.ReadinessCheck)
 }
