@@ -1,0 +1,245 @@
+//services/staff/proto/staff.proto
+syntax = "proto3";
+
+package staff;
+
+option go_package = "github.com/adammwaniki/bebabeba/services/staff/genproto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+
+service StaffService {
+    // Driver CRUD operations
+    rpc CreateDriver(CreateDriverRequest) returns (CreateDriverResponse);
+    rpc GetDriver(GetDriverRequest) returns (GetDriverResponse);
+    rpc GetDriverByUserID(GetDriverByUserIDRequest) returns (GetDriverResponse);
+    rpc ListDrivers(ListDriversRequest) returns (ListDriversResponse);
+    rpc UpdateDriver(UpdateDriverRequest) returns (UpdateDriverResponse);
+    rpc DeleteDriver(DeleteDriverRequest) returns (google.protobuf.Empty);
+    
+    // Driver status management
+    rpc UpdateDriverStatus(UpdateDriverStatusRequest) returns (UpdateDriverStatusResponse);
+    rpc GetActiveDrivers(GetActiveDriversRequest) returns (ListDriversResponse);
+    
+    // Driver certification management
+    rpc AddDriverCertification(AddDriverCertificationRequest) returns (AddDriverCertificationResponse);
+    rpc ListDriverCertifications(ListDriverCertificationsRequest) returns (ListDriverCertificationsResponse);
+    rpc UpdateCertification(UpdateCertificationRequest) returns (UpdateCertificationResponse);
+    rpc DeleteCertification(DeleteCertificationRequest) returns (google.protobuf.Empty);
+    
+    // Driver verification and compliance
+    rpc VerifyDriverLicense(VerifyDriverLicenseRequest) returns (VerifyDriverLicenseResponse);
+    rpc GetExpiringLicenses(GetExpiringLicensesRequest) returns (ListDriversResponse);
+    rpc GetExpiredCertifications(GetExpiredCertificationsRequest) returns (ListDriverCertificationsResponse);
+}
+
+// ================= Enums =================
+enum DriverStatus {
+    STATUS_UNSPECIFIED = 0;
+    PENDING_VERIFICATION = 1;
+    ACTIVE = 2;
+    SUSPENDED = 3;
+    INACTIVE = 4;
+}
+
+enum LicenseClass {
+    LICENSE_UNSPECIFIED = 0;
+    CLASS_A = 1;    // Motorcycles (bodaboda)
+    CLASS_B = 2;    // Light vehicles (cars, vans, pickup trucks)
+    CLASS_C = 3;    // Medium vehicles (trucks, buses)
+    CLASS_D = 4;    // Heavy vehicles (large trucks, buses)
+    CLASS_E = 5;    // Commercial passenger vehicles
+}
+
+enum CertificationStatus {
+    CERT_STATUS_UNSPECIFIED = 0;
+    CERT_ACTIVE = 1;
+    CERT_EXPIRED = 2;
+    CERT_SUSPENDED = 3;
+    CERT_REVOKED = 4;
+}
+
+// ================= Core Driver Messages =================
+message Driver {
+    string id = 1;                          // external_id
+    string user_id = 2;                     // reference to user service
+    string license_number = 3;
+    LicenseClass license_class = 4;
+    google.protobuf.Timestamp license_expiry = 5;
+    int32 experience_years = 6;
+    string phone_number = 7;
+    string emergency_contact_name = 8;
+    string emergency_contact_phone = 9;
+    DriverStatus status = 10;
+    google.protobuf.Timestamp hire_date = 11;
+    google.protobuf.Timestamp created_at = 12;
+    optional google.protobuf.Timestamp updated_at = 13;
+    
+    // Computed fields for convenience
+    bool license_expired = 14;
+    int32 days_until_license_expiry = 15;
+    repeated DriverCertification certifications = 16;
+}
+
+message DriverInput {
+    string user_id = 1;
+    string license_number = 2;
+    LicenseClass license_class = 3;
+    google.protobuf.Timestamp license_expiry = 4;
+    int32 experience_years = 5;
+    string phone_number = 6;
+    string emergency_contact_name = 7;
+    string emergency_contact_phone = 8;
+    google.protobuf.Timestamp hire_date = 9;
+}
+
+message CreateDriverRequest {
+    DriverInput driver = 1;
+}
+
+message CreateDriverResponse {
+    Driver driver = 1;
+}
+
+message GetDriverRequest {
+    string driver_id = 1;
+}
+
+message GetDriverByUserIDRequest {
+    string user_id = 1;
+}
+
+message GetDriverResponse {
+    Driver driver = 1;
+}
+
+message ListDriversRequest {
+    int32 page_size = 1;
+    string page_token = 2;
+    optional DriverStatus status_filter = 3;
+    optional LicenseClass license_class_filter = 4;
+    optional bool license_expiring_soon = 5;  // Within 30 days
+}
+
+message ListDriversResponse {
+    repeated Driver drivers = 1;
+    string next_page_token = 2;
+    int32 total_count = 3;
+}
+
+message UpdateDriverRequest {
+    string driver_id = 1;
+    DriverInput driver = 2;
+    google.protobuf.FieldMask update_mask = 3;
+}
+
+message UpdateDriverResponse {
+    Driver driver = 1;
+}
+
+message DeleteDriverRequest {
+    string driver_id = 1;
+}
+
+message UpdateDriverStatusRequest {
+    string driver_id = 1;
+    DriverStatus status = 2;
+    string reason = 3;  // Optional reason for status change
+}
+
+message UpdateDriverStatusResponse {
+    Driver driver = 1;
+}
+
+message GetActiveDriversRequest {
+    int32 page_size = 1;
+    string page_token = 2;
+    optional LicenseClass license_class_filter = 3;
+}
+
+// ================= Driver Certification Messages =================
+message DriverCertification {
+    string id = 1;                          // certification ID
+    string driver_id = 2;
+    string certification_name = 3;
+    string issued_by = 4;
+    google.protobuf.Timestamp issue_date = 5;
+    google.protobuf.Timestamp expiry_date = 6;
+    CertificationStatus status = 7;
+    google.protobuf.Timestamp created_at = 8;
+    optional google.protobuf.Timestamp updated_at = 9;
+    
+    // Computed fields
+    bool is_expired = 10;
+    int32 days_until_expiry = 11;
+}
+
+message CertificationInput {
+    string certification_name = 1;
+    string issued_by = 2;
+    google.protobuf.Timestamp issue_date = 3;
+    google.protobuf.Timestamp expiry_date = 4;
+}
+
+message AddDriverCertificationRequest {
+    string driver_id = 1;
+    CertificationInput certification = 2;
+}
+
+message AddDriverCertificationResponse {
+    DriverCertification certification = 1;
+}
+
+message ListDriverCertificationsRequest {
+    string driver_id = 1;
+    int32 page_size = 2;
+    string page_token = 3;
+    optional CertificationStatus status_filter = 4;
+    optional bool expiring_soon = 5;  // Within 30 days
+}
+
+message ListDriverCertificationsResponse {
+    repeated DriverCertification certifications = 1;
+    string next_page_token = 2;
+}
+
+message UpdateCertificationRequest {
+    string certification_id = 1;
+    CertificationInput certification = 2;
+    google.protobuf.FieldMask update_mask = 3;
+}
+
+message UpdateCertificationResponse {
+    DriverCertification certification = 1;
+}
+
+message DeleteCertificationRequest {
+    string certification_id = 1;
+}
+
+// ================= Verification and Compliance Messages =================
+message VerifyDriverLicenseRequest {
+    string driver_id = 1;
+    string license_number = 2;  // For verification against external systems
+}
+
+message VerifyDriverLicenseResponse {
+    bool is_valid = 1;
+    bool is_expired = 2;
+    string verification_source = 3;
+    google.protobuf.Timestamp verified_at = 4;
+    string notes = 5;
+}
+
+message GetExpiringLicensesRequest {
+    int32 days_ahead = 1;  // Default 30 days
+    int32 page_size = 2;
+    string page_token = 3;
+}
+
+message GetExpiredCertificationsRequest {
+    int32 page_size = 1;
+    string page_token = 2;
+    optional int32 expired_since_days = 3;  // Expired within X days
+}

@@ -18,6 +18,7 @@ import (
 	"github.com/adammwaniki/bebabeba/services/gateway/internal/middleware"
 	userproto "github.com/adammwaniki/bebabeba/services/user/proto/genproto"
 	vehicleproto "github.com/adammwaniki/bebabeba/services/vehicle/proto/genproto"
+	staffproto "github.com/adammwaniki/bebabeba/services/staff/proto/genproto"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/joho/godotenv/autoload"
 	"golang.org/x/oauth2"
@@ -30,6 +31,7 @@ import (
 var (
 	userGRPCAddr    = os.Getenv("USER_GRPC_ADDR")
 	vehicleGRPCAddr = os.Getenv("VEHICLE_GRPC_ADDR")
+	staffGRPCAddr   = os.Getenv("STAFF_GRPC_ADDR")
 	gatewayAddr     = os.Getenv("GATEWAY_HTTP_ADDR")
 
 	// Google OAuth2 credentials
@@ -120,10 +122,21 @@ func main() {
 	}
 	defer vehicleConn.Close()
 
+	// Create gRPC connection to Staff Service 
+	staffConn, err := grpc.NewClient(
+		staffGRPCAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		log.Fatal("Failed to dial staff service: ", err)
+	}
+	defer staffConn.Close()
+
 	// Create clients
 	userClient := userproto.NewUserServiceClient(userConn)
 	userHealth := grpc_health_v1.NewHealthClient(userConn)
 	vehicleClient := vehicleproto.NewVehicleServiceClient(vehicleConn)
+	staffClient := staffproto.NewStaffServiceClient(staffConn)
 
 	// Configure Google OAuth2
 	googleOAuthConfig := &oauth2.Config{
@@ -139,13 +152,14 @@ func main() {
 	userHandler := handler.NewUserHandler(userClient, googleOAuthConfig)
 	authHandler := handler.NewAuthHandler(userClient, sessionManager, jwtService)
 	vehicleHandler := handler.NewVehicleHandler(vehicleClient)
+	staffHandler := handler.NewStaffHandler(staffClient)
 	
 	// Initialize authentication middleware with session support
 	authMiddleware := middleware.NewAuthMiddleware(jwtService, sessionManager)
 
 	// Configure server
 	mux := http.NewServeMux()
-	handler.SetupAPIRoutes(mux, userHandler, authHandler, vehicleHandler, healthHandler, authMiddleware, sessionManager)
+	handler.SetupAPIRoutes(mux, userHandler, authHandler, vehicleHandler, staffHandler, healthHandler, authMiddleware, sessionManager)
 
 	server := &http.Server{
 		Addr:    gatewayAddr,

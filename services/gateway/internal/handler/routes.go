@@ -14,6 +14,7 @@ func SetupAPIRoutes(
 	userHandler *UserHandler, 
 	authHandler *AuthHandler,
 	vehicleHandler *VehicleHandler,
+	staffHandler *StaffHandler,
 	healthHandler *HealthHandler,
 	authMiddleware *middleware.AuthMiddleware,
 	sessionManager *session.SessionManager,
@@ -67,6 +68,22 @@ func SetupAPIRoutes(
 	// Vehicle type management
 	apiV1Router.HandleFunc("POST /transport/vehicle-types", authMiddleware.RequireAuth(vehicleHandler.HandleCreateVehicleType))
 	apiV1Router.HandleFunc("GET /transport/vehicle-types", authMiddleware.RequireAuth(vehicleHandler.HandleListVehicleTypes))
+
+	// Staff Management (NEW)
+	apiV1Router.HandleFunc("POST /transport/drivers", authMiddleware.RequireAuth(staffHandler.HandleCreateDriver))
+	apiV1Router.HandleFunc("GET /transport/drivers/{id}", authMiddleware.RequireAuth(staffHandler.HandleGetDriver))
+	apiV1Router.HandleFunc("GET /transport/drivers/user/{user_id}", authMiddleware.RequireAuth(staffHandler.HandleGetDriverByUserID))
+	apiV1Router.HandleFunc("GET /transport/drivers", authMiddleware.RequireAuth(staffHandler.HandleListDrivers))
+	apiV1Router.HandleFunc("PATCH /transport/drivers/{id}/status", authMiddleware.RequireAuth(staffHandler.HandleUpdateDriverStatus))
+	apiV1Router.HandleFunc("GET /transport/drivers/active", authMiddleware.RequireAuth(staffHandler.HandleGetActiveDrivers))
+	
+	// Driver certifications
+	apiV1Router.HandleFunc("POST /transport/drivers/{id}/certifications", authMiddleware.RequireAuth(staffHandler.HandleAddDriverCertification))
+	apiV1Router.HandleFunc("GET /transport/drivers/{id}/certifications", authMiddleware.RequireAuth(staffHandler.HandleListDriverCertifications))
+	
+	// Driver verification and compliance
+	apiV1Router.HandleFunc("POST /transport/drivers/{id}/verify-license", authMiddleware.RequireAuth(staffHandler.HandleVerifyDriverLicense))
+	apiV1Router.HandleFunc("GET /transport/drivers/expiring-licenses", authMiddleware.RequireAuth(staffHandler.HandleGetExpiringLicenses))
 
 	// Mount the API router at /api/v1/ with prefix stripping
 	// The StripPrefix happens BEFORE routes are matched, so the apiV1Router sees clean paths
