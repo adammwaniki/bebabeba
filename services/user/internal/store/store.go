@@ -348,12 +348,6 @@ WHERE (?='' OR status = ?)
 ORDER BY created_at DESC
 LIMIT ?`
 
-const listUsersCountQuery = `
-SELECT COUNT(*)
-FROM users
-WHERE (?='' OR status = ?)
-  AND (?='' OR CONCAT(first_name, ' ', last_name) LIKE ?)`
-
 // ListUsers retrieves a paginated list of users with optional filtering
 func (s *store) ListUsers(ctx context.Context, pageSize int32, pageToken string, statusFilter *genproto.UserStatusEnum, nameFilter string) ([]*genproto.GetUserResponse, string, error) {
 	if pageSize <= 0 || pageSize > 100 {

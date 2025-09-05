@@ -1,4 +1,4 @@
-// services/gateway/internal/handler/routes.go
+// services/gateway/internal/handler/routes.go (UPDATED)
 package handler
 
 import (
@@ -13,6 +13,7 @@ func SetupAPIRoutes(
 	mux *http.ServeMux, 
 	userHandler *UserHandler, 
 	authHandler *AuthHandler,
+	vehicleHandler *VehicleHandler,
 	healthHandler *HealthHandler,
 	authMiddleware *middleware.AuthMiddleware,
 	sessionManager *session.SessionManager,
@@ -25,7 +26,8 @@ func SetupAPIRoutes(
 		userHandler.HandleGoogleCallbackWithJWT(sessionManager, w, r)
 	}
 
-	// PUBLIC endpoints (no authentication required) - these paths are seen WITHOUT /api/v1
+	// ================= PUBLIC ENDPOINTS =================
+	// No authentication required - these paths are seen WITHOUT /api/v1
 	apiV1Router.HandleFunc("POST /users/register", authHandler.HandleCreateUserWithJWT)
 	apiV1Router.HandleFunc("POST /auth/login", authHandler.HandleLogin)
 	apiV1Router.HandleFunc("POST /auth/refresh", authHandler.HandleRefresh)
@@ -36,7 +38,10 @@ func SetupAPIRoutes(
 	apiV1Router.HandleFunc("GET /healthz", healthHandler.LivenessCheck)
 	apiV1Router.HandleFunc("GET /readyz", healthHandler.ReadinessCheck)
 
-	// PROTECTED endpoints (require authentication) - wrappped with auth middleware individually
+	// ================= PROTECTED ENDPOINTS =================
+	// Require authentication - wrapped with auth middleware individually
+	
+	// Auth & User Management
 	apiV1Router.HandleFunc("GET /auth/profile", authMiddleware.RequireAuth(authHandler.HandleProfile))
 	apiV1Router.HandleFunc("GET /auth/sessions", authMiddleware.RequireAuth(authHandler.HandleGetSessions))
 	apiV1Router.HandleFunc("POST /auth/logout", authMiddleware.RequireAuth(authHandler.HandleLogout))
@@ -44,6 +49,24 @@ func SetupAPIRoutes(
 	apiV1Router.HandleFunc("GET /users", authMiddleware.RequireAuth(userHandler.HandleListUsers))
 	apiV1Router.HandleFunc("PUT /users/{id}", authMiddleware.RequireAuth(userHandler.HandleUpdateUserByID))
 	apiV1Router.HandleFunc("DELETE /users/{id}", authMiddleware.RequireAuth(userHandler.HandleDeleteUserByID))
+
+	// ================= TRANSPORT ENDPOINTS =================
+	
+	// Vehicle Management
+	apiV1Router.HandleFunc("POST /transport/vehicles", authMiddleware.RequireAuth(vehicleHandler.HandleCreateVehicle))
+	apiV1Router.HandleFunc("GET /transport/vehicles/{id}", authMiddleware.RequireAuth(vehicleHandler.HandleGetVehicle))
+	apiV1Router.HandleFunc("GET /transport/vehicles", authMiddleware.RequireAuth(vehicleHandler.HandleListVehicles))
+	apiV1Router.HandleFunc("PUT /transport/vehicles/{id}", authMiddleware.RequireAuth(vehicleHandler.HandleUpdateVehicle))
+	apiV1Router.HandleFunc("DELETE /transport/vehicles/{id}", authMiddleware.RequireAuth(vehicleHandler.HandleDeleteVehicle))
+	apiV1Router.HandleFunc("PATCH /transport/vehicles/{id}/status", authMiddleware.RequireAuth(vehicleHandler.HandleUpdateVehicleStatus))
+	
+	// Vehicle queries
+	apiV1Router.HandleFunc("GET /transport/vehicles/types/{type_id}/vehicles", authMiddleware.RequireAuth(vehicleHandler.HandleGetVehiclesByType))
+	apiV1Router.HandleFunc("GET /transport/vehicles/available", authMiddleware.RequireAuth(vehicleHandler.HandleGetAvailableVehicles))
+	
+	// Vehicle type management
+	apiV1Router.HandleFunc("POST /transport/vehicle-types", authMiddleware.RequireAuth(vehicleHandler.HandleCreateVehicleType))
+	apiV1Router.HandleFunc("GET /transport/vehicle-types", authMiddleware.RequireAuth(vehicleHandler.HandleListVehicleTypes))
 
 	// Mount the API router at /api/v1/ with prefix stripping
 	// The StripPrefix happens BEFORE routes are matched, so the apiV1Router sees clean paths

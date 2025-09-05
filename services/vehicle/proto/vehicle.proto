@@ -1,0 +1,174 @@
+//services/vehicle/proto/vehicle.proto
+syntax = "proto3";
+
+package vehicle;
+
+option go_package = "github.com/adammwaniki/bebabeba/services/vehicle/genproto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+
+service VehicleService {
+    // Basic CRUD operations
+    rpc CreateVehicle(CreateVehicleRequest) returns (CreateVehicleResponse);
+    rpc GetVehicle(GetVehicleRequest) returns (GetVehicleResponse);
+    rpc ListVehicles(ListVehiclesRequest) returns (ListVehiclesResponse);
+    rpc UpdateVehicle(UpdateVehicleRequest) returns (UpdateVehicleResponse);
+    rpc DeleteVehicle(DeleteVehicleRequest) returns (google.protobuf.Empty);
+    
+    // Specialized queries
+    rpc GetVehiclesByType(GetVehiclesByTypeRequest) returns (ListVehiclesResponse);
+    rpc GetAvailableVehicles(GetAvailableVehiclesRequest) returns (ListVehiclesResponse);
+    rpc UpdateVehicleStatus(UpdateVehicleStatusRequest) returns (UpdateVehicleStatusResponse);
+    
+    // Vehicle type management
+    rpc CreateVehicleType(CreateVehicleTypeRequest) returns (CreateVehicleTypeResponse);
+    rpc ListVehicleTypes(ListVehicleTypesRequest) returns (ListVehicleTypesResponse);
+}
+
+// ================= Enums =================
+enum VehicleStatus {
+    STATUS_UNSPECIFIED = 0;
+    ACTIVE = 1;
+    MAINTENANCE = 2;
+    RETIRED = 3;
+    ASSIGNED = 4;
+}
+
+enum FuelType {
+    FUEL_UNSPECIFIED = 0;
+    PETROL = 1;
+    DIESEL = 2;
+    ELECTRIC = 3;
+    HYBRID = 4;
+}
+
+// ================= Vehicle Type Messages =================
+message VehicleType {
+    string id = 1;
+    string name = 2;
+    string description = 3;
+    google.protobuf.Timestamp created_at = 4;
+}
+
+message CreateVehicleTypeRequest {
+    string name = 1;
+    string description = 2;
+}
+
+message CreateVehicleTypeResponse {
+    VehicleType vehicle_type = 1;
+}
+
+message ListVehicleTypesRequest {
+    int32 page_size = 1;
+    string page_token = 2;
+}
+
+message ListVehicleTypesResponse {
+    repeated VehicleType vehicle_types = 1;
+    string next_page_token = 2;
+}
+
+// ================= Core Vehicle Messages =================
+message Vehicle {
+    string id = 1;                          // external_id
+    string vehicle_type_id = 2;             // reference to vehicle_type
+    string vehicle_type_name = 3;           // for convenience
+    string license_plate = 4;
+    string make = 5;
+    string model = 6;
+    int32 year = 7;
+    string color = 8;
+    int32 seating_capacity = 9;
+    FuelType fuel_type = 10;
+    string engine_number = 11;
+    string chassis_number = 12;
+    google.protobuf.Timestamp registration_date = 13;
+    google.protobuf.Timestamp insurance_expiry = 14;
+    VehicleStatus status = 15;
+    google.protobuf.Timestamp created_at = 16;
+    optional google.protobuf.Timestamp updated_at = 17;
+}
+
+message CreateVehicleRequest {
+    VehicleInput vehicle = 1;
+}
+
+message VehicleInput {
+    string vehicle_type_id = 1;
+    string license_plate = 2;
+    string make = 3;
+    string model = 4;
+    int32 year = 5;
+    string color = 6;
+    int32 seating_capacity = 7;
+    FuelType fuel_type = 8;
+    string engine_number = 9;
+    string chassis_number = 10;
+    google.protobuf.Timestamp registration_date = 11;
+    google.protobuf.Timestamp insurance_expiry = 12;
+}
+
+message CreateVehicleResponse {
+    Vehicle vehicle = 1;
+}
+
+message GetVehicleRequest {
+    string vehicle_id = 1;
+}
+
+message GetVehicleResponse {
+    Vehicle vehicle = 1;
+}
+
+message ListVehiclesRequest {
+    int32 page_size = 1;
+    string page_token = 2;
+    optional VehicleStatus status_filter = 3;
+    optional string vehicle_type_filter = 4;
+    optional string make_filter = 5;
+}
+
+message ListVehiclesResponse {
+    repeated Vehicle vehicles = 1;
+    string next_page_token = 2;
+    int32 total_count = 3;
+}
+
+message UpdateVehicleRequest {
+    string vehicle_id = 1;
+    VehicleInput vehicle = 2;
+    google.protobuf.FieldMask update_mask = 3;
+}
+
+message UpdateVehicleResponse {
+    Vehicle vehicle = 1;
+}
+
+message DeleteVehicleRequest {
+    string vehicle_id = 1;
+}
+
+message GetVehiclesByTypeRequest {
+    string vehicle_type_id = 1;
+    int32 page_size = 2;
+    string page_token = 3;
+    optional VehicleStatus status_filter = 4;
+}
+
+message GetAvailableVehiclesRequest {
+    optional string vehicle_type_id = 1;
+    int32 page_size = 2;
+    string page_token = 3;
+}
+
+message UpdateVehicleStatusRequest {
+    string vehicle_id = 1;
+    VehicleStatus status = 2;
+}
+
+message UpdateVehicleStatusResponse {
+    Vehicle vehicle = 1;
+}

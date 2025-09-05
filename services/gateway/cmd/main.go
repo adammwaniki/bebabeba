@@ -17,6 +17,7 @@ import (
 	"github.com/adammwaniki/bebabeba/services/gateway/internal/handler"
 	"github.com/adammwaniki/bebabeba/services/gateway/internal/middleware"
 	userproto "github.com/adammwaniki/bebabeba/services/user/proto/genproto"
+	vehicleproto "github.com/adammwaniki/bebabeba/services/vehicle/proto/genproto"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/joho/godotenv/autoload"
 	"golang.org/x/oauth2"
@@ -27,8 +28,9 @@ import (
 )
 
 var (
-	userGRPCAddr = os.Getenv("USER_GRPC_ADDR")
-	gatewayAddr  = os.Getenv("GATEWAY_HTTP_ADDR")
+	userGRPCAddr    = os.Getenv("USER_GRPC_ADDR")
+	vehicleGRPCAddr = os.Getenv("VEHICLE_GRPC_ADDR")
+	gatewayAddr     = os.Getenv("GATEWAY_HTTP_ADDR")
 
 	// Google OAuth2 credentials
 	googleClientID     = os.Getenv("GOOGLE_CLIENT_ID")
@@ -48,7 +50,7 @@ var (
     */
 
 	// Database configuration for sessions
-	dbDSN = os.Getenv("SESSIONS_DB_DSN") // Using the same DB as user service for now - I might use redis later for speed
+	dbDSN = os.Getenv("SESSIONS_DB_DSN")
 )
 
 func main() {
@@ -108,9 +110,20 @@ func main() {
 	}
 	defer userConn.Close()
 
+	// Create gRPC connection to Vehicle Service
+	vehicleConn, err := grpc.NewClient(
+		vehicleGRPCAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		log.Fatal("Failed to dial vehicle service: ", err)
+	}
+	defer vehicleConn.Close()
+
 	// Create clients
 	userClient := userproto.NewUserServiceClient(userConn)
 	userHealth := grpc_health_v1.NewHealthClient(userConn)
+	vehicleClient := vehicleproto.NewVehicleServiceClient(vehicleConn)
 
 	// Configure Google OAuth2
 	googleOAuthConfig := &oauth2.Config{
@@ -125,13 +138,14 @@ func main() {
 	healthHandler := handler.NewHealthHandler(userHealth)
 	userHandler := handler.NewUserHandler(userClient, googleOAuthConfig)
 	authHandler := handler.NewAuthHandler(userClient, sessionManager, jwtService)
+	vehicleHandler := handler.NewVehicleHandler(vehicleClient)
 	
 	// Initialize authentication middleware with session support
 	authMiddleware := middleware.NewAuthMiddleware(jwtService, sessionManager)
 
 	// Configure server
 	mux := http.NewServeMux()
-	handler.SetupAPIRoutes(mux, userHandler, authHandler, healthHandler, authMiddleware, sessionManager)
+	handler.SetupAPIRoutes(mux, userHandler, authHandler, vehicleHandler, healthHandler, authMiddleware, sessionManager)
 
 	server := &http.Server{
 		Addr:    gatewayAddr,
