@@ -1,4 +1,4 @@
-// services/gateway/internal/handler/routes.go (UPDATED)
+// services/gateway/internal/handler/routes.go (FIXED)
 package handler
 
 import (
@@ -69,21 +69,28 @@ func SetupAPIRoutes(
 	apiV1Router.HandleFunc("POST /transport/vehicle-types", authMiddleware.RequireAuth(vehicleHandler.HandleCreateVehicleType))
 	apiV1Router.HandleFunc("GET /transport/vehicle-types", authMiddleware.RequireAuth(vehicleHandler.HandleListVehicleTypes))
 
-	// Staff Management (NEW)
-	apiV1Router.HandleFunc("POST /transport/drivers", authMiddleware.RequireAuth(staffHandler.HandleCreateDriver))
-	apiV1Router.HandleFunc("GET /transport/drivers/{id}", authMiddleware.RequireAuth(staffHandler.HandleGetDriver))
-	apiV1Router.HandleFunc("GET /transport/drivers/user/{user_id}", authMiddleware.RequireAuth(staffHandler.HandleGetDriverByUserID))
-	apiV1Router.HandleFunc("GET /transport/drivers", authMiddleware.RequireAuth(staffHandler.HandleListDrivers))
-	apiV1Router.HandleFunc("PATCH /transport/drivers/{id}/status", authMiddleware.RequireAuth(staffHandler.HandleUpdateDriverStatus))
-	apiV1Router.HandleFunc("GET /transport/drivers/active", authMiddleware.RequireAuth(staffHandler.HandleGetActiveDrivers))
+	// ================= STAFF MANAGEMENT =================
+	// Restructured to group all literal paths together, then all parameterized paths to handle Go specificity errors
 	
-	// Driver certifications
+	// All literal/static driver endpoints first (no parameters)
+	apiV1Router.HandleFunc("GET /transport/drivers/active", authMiddleware.RequireAuth(staffHandler.HandleGetActiveDrivers))
+	apiV1Router.HandleFunc("GET /transport/drivers/expiring-licenses", authMiddleware.RequireAuth(staffHandler.HandleGetExpiringLicenses))
+	
+	// Base driver operations (collection-level)
+	apiV1Router.HandleFunc("POST /transport/drivers", authMiddleware.RequireAuth(staffHandler.HandleCreateDriver))
+	apiV1Router.HandleFunc("GET /transport/drivers", authMiddleware.RequireAuth(staffHandler.HandleListDrivers))
+	
+	// User lookup endpoint (moved to avoid conflicts with ID-based routes)
+	apiV1Router.HandleFunc("GET /users/{user_id}/driver", authMiddleware.RequireAuth(staffHandler.HandleGetDriverByUserID))
+	
+	// Individual driver operations (all ID-based routes together)
+	apiV1Router.HandleFunc("GET /transport/drivers/{id}", authMiddleware.RequireAuth(staffHandler.HandleGetDriver))
+	apiV1Router.HandleFunc("PATCH /transport/drivers/{id}/status", authMiddleware.RequireAuth(staffHandler.HandleUpdateDriverStatus))
+	apiV1Router.HandleFunc("POST /transport/drivers/{id}/verify-license", authMiddleware.RequireAuth(staffHandler.HandleVerifyDriverLicense))
+	
+	// Driver certifications (sub-resource of driver)
 	apiV1Router.HandleFunc("POST /transport/drivers/{id}/certifications", authMiddleware.RequireAuth(staffHandler.HandleAddDriverCertification))
 	apiV1Router.HandleFunc("GET /transport/drivers/{id}/certifications", authMiddleware.RequireAuth(staffHandler.HandleListDriverCertifications))
-	
-	// Driver verification and compliance
-	apiV1Router.HandleFunc("POST /transport/drivers/{id}/verify-license", authMiddleware.RequireAuth(staffHandler.HandleVerifyDriverLicense))
-	apiV1Router.HandleFunc("GET /transport/drivers/expiring-licenses", authMiddleware.RequireAuth(staffHandler.HandleGetExpiringLicenses))
 
 	// Mount the API router at /api/v1/ with prefix stripping
 	// The StripPrefix happens BEFORE routes are matched, so the apiV1Router sees clean paths
