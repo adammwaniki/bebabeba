@@ -1,4 +1,4 @@
-// services/gateway/internal/handler/routes.go (FIXED)
+// services/gateway/internal/handler/routes.go
 package handler
 
 import (
